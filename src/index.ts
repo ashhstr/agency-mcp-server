@@ -150,14 +150,35 @@ async function main() {
     const httpServer = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
+      // Full CORS headers on every request
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, mcp-session-id",
+      );
+      res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+
+      // CORS preflight
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
       if (req.method === "GET" && url.pathname === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", agents: state.records.length, version: pkg.version }));
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            agents: state.records.length,
+            version: pkg.version,
+          }),
+        );
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/sse") {
-        res.setHeader("Access-Control-Allow-Origin", "*");
         const transport = new SSEServerTransport("/messages", res);
         transports.set(transport.sessionId, transport);
         res.on("close", () => transports.delete(transport.sessionId));
@@ -187,7 +208,9 @@ async function main() {
     });
 
     httpServer.listen(PORT, () =>
-      console.error(`[agency] MCP server v${pkg.version} running on HTTP/SSE at http://0.0.0.0:${PORT}/sse`),
+      console.error(
+        `[agency] MCP server v${pkg.version} running on HTTP/SSE at http://0.0.0.0:${PORT}/sse`,
+      ),
     );
   } else {
     const transport = new StdioServerTransport();
