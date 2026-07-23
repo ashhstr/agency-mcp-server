@@ -127,20 +127,6 @@ console.error(
   `[agency] Indexed ${state.records.length} agents across ${state.divisions.length} divisions.`,
 );
 
-const server = new McpServer({
-  name: "agency",
-  version: pkg.version,
-});
-
-registerHandlers(server, state, {
-  agentsPath,
-  isLocalPath: !!process.env.AGENCY_AGENTS_PATH,
-  updateIntervalMs: UPDATE_INTERVAL_MS,
-  lastPullTimestamp,
-  shouldPull,
-  pullRepo,
-});
-
 const PORT = process.env.PORT ? Number(process.env.PORT) : null;
 
 async function main() {
@@ -179,10 +165,24 @@ async function main() {
       }
 
       if (req.method === "GET" && url.pathname === "/sse") {
+        const perConnServer = new McpServer({
+          name: "agency",
+          version: pkg.version,
+        });
+        registerHandlers(perConnServer, state, {
+          agentsPath,
+          isLocalPath: !!process.env.AGENCY_AGENTS_PATH,
+          updateIntervalMs: UPDATE_INTERVAL_MS,
+          lastPullTimestamp,
+          shouldPull,
+          pullRepo,
+        });
         const transport = new SSEServerTransport("/messages", res);
         transports.set(transport.sessionId, transport);
-        res.on("close", () => transports.delete(transport.sessionId));
-        await server.connect(transport);
+        res.on("close", () => {
+          transports.delete(transport.sessionId);
+        });
+        await perConnServer.connect(transport);
         return;
       }
 
@@ -213,6 +213,20 @@ async function main() {
       ),
     );
   } else {
+    const server = new McpServer({
+      name: "agency",
+      version: pkg.version,
+    });
+
+    registerHandlers(server, state, {
+      agentsPath,
+      isLocalPath: !!process.env.AGENCY_AGENTS_PATH,
+      updateIntervalMs: UPDATE_INTERVAL_MS,
+      lastPullTimestamp,
+      shouldPull,
+      pullRepo,
+    });
+
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(`[agency] MCP server v${pkg.version} running on stdio.`);
