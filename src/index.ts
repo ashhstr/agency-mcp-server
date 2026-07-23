@@ -179,10 +179,24 @@ async function main() {
       }
 
       if (req.method === "GET" && url.pathname === "/sse") {
+        const perConnServer = new McpServer({
+          name: "agency",
+          version: pkg.version,
+        });
+        registerHandlers(perConnServer, state, {
+          agentsPath,
+          isLocalPath: !!process.env.AGENCY_AGENTS_PATH,
+          updateIntervalMs: UPDATE_INTERVAL_MS,
+          lastPullTimestamp,
+          shouldPull,
+          pullRepo,
+        });
         const transport = new SSEServerTransport("/messages", res);
         transports.set(transport.sessionId, transport);
-        res.on("close", () => transports.delete(transport.sessionId));
-        await server.connect(transport);
+        res.on("close", () => {
+          transports.delete(transport.sessionId);
+        });
+        await perConnServer.connect(transport);
         return;
       }
 
