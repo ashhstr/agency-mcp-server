@@ -7,9 +7,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createIndexState } from "./registry.js";
 import { registerHandlers } from "./tools.js";
@@ -17,8 +19,6 @@ import { registerHandlers } from "./tools.js";
 const pkg = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "package.json"), "utf-8"),
 );
-
-// --- Configuration via environment variables ---
 
 const REPO_URL =
   process.env.AGENCY_REPO_URL ||
@@ -80,7 +80,6 @@ function ensureAgentsPath(): string {
     return p;
   }
 
-  // No env set — auto-fetch agent templates from configured repo
   if (existsSync(join(DEFAULT_AGENTS_PATH, ".git"))) {
     if (shouldPull()) {
       console.error(
@@ -107,7 +106,7 @@ function ensureAgentsPath(): string {
     markPulled();
   } catch {
     console.error(
-      "[agency] Fatal: Could not clone agent templates. Ensure git is installed, or set AGENCY_AGENTS_PATH manually.",
+      "[agency] Fatal: Could not clone agent templates. Ensure git is installed.",
     );
     process.exit(1);
   }
@@ -120,9 +119,7 @@ console.error(`[agency] Scanning agents in: ${agentsPath}`);
 const state = createIndexState(agentsPath);
 
 if (state.records.length === 0) {
-  console.error(
-    "[agency] Fatal: No agents found. Check AGENCY_AGENTS_PATH points to a directory with agent markdown files.",
-  );
+  console.error("[agency] Fatal: No agents found.");
   process.exit(1);
 }
 
@@ -144,10 +141,59 @@ registerHandlers(server, state, {
   pullRepo,
 });
 
+const PORT = process.env.PORT ? Number(process.env.PORT) : null;
+
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`[agency] MCP server v${pkg.version} running on stdio.`);
+  if (PORT !== null) {
+    const transports = new Map<string, SSEServerTransport>();
+
+    const httpServer = createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+
+      if (req.method === "GET" && url.pathname === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", agents: state.records.length, version: pkg.version }));
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/sse") {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        const transport = new SSEServerTransport("/messages", res);
+        transports.set(transport.sessionId, transport);
+        res.on("close", () => transports.delete(transport.sessionId));
+        await server.connect(transport);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/messages") {
+        const sessionId = url.searchParams.get("sessionId");
+        if (!sessionId) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "Missing sessionId" }));
+          return;
+        }
+        const transport = transports.get(sessionId);
+        if (!transport) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: "Session not found" }));
+          return;
+        }
+        await transport.handlePostMessage(req, res);
+        return;
+      }
+
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Not found" }));
+    });
+
+    httpServer.listen(PORT, () =>
+      console.error(`[agency] MCP server v${pkg.version} running on HTTP/SSE at http://0.0.0.0:${PORT}/sse`),
+    );
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error(`[agency] MCP server v${pkg.version} running on stdio.`);
+  }
 }
 
 main().catch((error) => {
